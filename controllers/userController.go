@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/base64"
 	"net/http"
 	"os"
 	"time"
@@ -83,6 +84,35 @@ func GetPair(c *gin.Context) {
 		return
 	}
 
-	// Send it back
-	c.JSON(http.StatusOK, gin.H{"token": tokenString})
+	// Generate refresh token hash
+	originalRefreshToken := uuid.New().String()
+	hashedToken, err := bcrypt.GenerateFromPassword([]byte(originalRefreshToken), bcrypt.DefaultCost)
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to hash refresh token"})
+		return
+	}
+
+	// Create refresh token
+	refreshToken := models.RefreshToken{
+		UserId:  user.Id,
+		Token:   string(hashedToken),
+		Expires: time.Now().Add(time.Hour * 24 * 20).Unix(),
+	}
+
+	result := initializers.DB.Create(&refreshToken)
+
+	if result.Error != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create refresh token"})
+		return
+	}
+
+	// Refresh token to base64
+	basedRefreshToken := base64.StdEncoding.EncodeToString([]byte(originalRefreshToken))
+
+	// Respond
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("Authorization", tokenString, 60*20, "", "", false, true)
+
+	c.JSON(http.StatusOK, gin.H{"RefreshToken": basedRefreshToken})
 }
