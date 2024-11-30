@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/smtp"
 	"os"
 	"time"
 
@@ -40,7 +41,10 @@ func RefreshAuth(c *gin.Context) {
 		return
 	}
 
+	var ip string
 	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+
+		ip = claims["ip"].(string)
 		// Check if the token is expired
 		if float64(time.Now().Unix()) > claims["exp"].(float64) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, "Token is expired")
@@ -73,9 +77,11 @@ func RefreshAuth(c *gin.Context) {
 	}
 
 	// get the refreshToken
-	user, _ := c.Get("user")
+	userFromContext, _ := c.Get("user")
+	user := userFromContext.(models.User)
+
 	var refreshToken models.RefreshToken
-	initializers.DB.First(&refreshToken, "user_id = ?", user.(models.User).Id)
+	initializers.DB.First(&refreshToken, "user_id = ?", user.Id)
 
 	// decode from base64
 	decodedRefreshToken, _ := base64.StdEncoding.DecodeString(refreshTokenString)
@@ -87,6 +93,29 @@ func RefreshAuth(c *gin.Context) {
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, "Refresh token is invalid")
 		return
+	}
+
+	// compare ips and send email
+
+	if ip != c.ClientIP() {
+		to := []string{user.Email} // Получатель
+		subject := "В Ваш аккаунт вошли с другого адреса."
+		body := fmt.Sprintf("В Ваш аккаунт вошли с подозрительного адреса (%s). Если это были не Вы - обратитесь в службу поддержки.", c.ClientIP())
+
+		message := []byte(fmt.Sprintf("Subject: %s\n\n%s", subject, body))
+
+		err := smtp.SendMail(
+			os.Getenv("SMTP_ADDR"),
+			initializers.SmtpAuth,
+			os.Getenv("FROM_EMAIL"),
+			to,
+			message,
+		)
+
+		if err != nil {
+			fmt.Printf("Send mail error %v", err)
+			return
+		}
 	}
 
 	c.Next()

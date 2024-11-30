@@ -11,6 +11,7 @@ func init() {
 	initializers.LoadEnvVars()
 	initializers.ConnectToDB()
 	initializers.SyncDB()
+	initializers.ConnectToMail()
 }
 
 func main() {

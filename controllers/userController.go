@@ -48,7 +48,7 @@ func Signup(c *gin.Context) {
 	}
 
 	// Respond
-	c.JSON(http.StatusOK, gin.H{"message": "success"})
+	c.JSON(http.StatusOK, gin.H{"message": "success", "userId": user.Id})
 }
 
 func GetPair(c *gin.Context) {
