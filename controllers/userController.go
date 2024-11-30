@@ -71,6 +71,18 @@ func GetPair(c *gin.Context) {
 		return
 	}
 
+	c.Set("user", user)
+	GetJwtAndRefresh(c)
+}
+
+func Refresh(c *gin.Context) {
+	GetJwtAndRefresh(c)
+}
+
+func GetJwtAndRefresh(c *gin.Context) {
+	userFromContext, _ := c.Get("user")
+	user := userFromContext.(models.User)
+
 	// Generate JWT token
 	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
 		"sub": user.Id,
@@ -134,9 +146,4 @@ func GetPair(c *gin.Context) {
 	c.SetCookie("RefreshToken", basedRefreshToken, 60*60*24*20, "", "", false, true)
 
 	c.JSON(http.StatusOK, gin.H{"AccessToken": jwtTokenString})
-}
-
-func Refresh(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"auth": "yesss"})
-
 }
