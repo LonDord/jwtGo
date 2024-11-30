@@ -135,3 +135,8 @@ func GetPair(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"AccessToken": jwtTokenString})
 }
+
+func Refresh(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"auth": "yesss"})
+
+}
