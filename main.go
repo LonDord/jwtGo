@@ -17,6 +17,6 @@ func main() {
 	r := gin.Default()
 	r.POST("/signup", controllers.Signup)
 	r.GET("/getpair", controllers.GetPair)
-	r.POST("/refresh", middleware.RequireAuth, controllers.Refresh)
+	r.POST("/refresh", middleware.RefreshAuth, controllers.Refresh)
 	r.Run()
 }

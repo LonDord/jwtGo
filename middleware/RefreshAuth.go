@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,9 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
-func RequireAuth(c *gin.Context) {
+func RefreshAuth(c *gin.Context) {
 
 	// Get the jwt token
 
@@ -57,10 +59,35 @@ func RequireAuth(c *gin.Context) {
 
 		c.Set("user", user)
 
-		c.Next()
 	} else {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, "Token is invalid")
 		return
 	}
 
+	// Get the cookie
+	refreshTokenString, err := c.Cookie("RefreshToken")
+
+	if err != nil {
+		c.AbortWithStatus(http.StatusUnauthorized)
+		return
+	}
+
+	// get the refreshToken
+	user, _ := c.Get("user")
+	var refreshToken models.RefreshToken
+	initializers.DB.First(&refreshToken, "user_id = ?", user.(models.User).Id)
+
+	// decode from base64
+	decodedRefreshToken, _ := base64.StdEncoding.DecodeString(refreshTokenString)
+	originalRefreshToken := string(decodedRefreshToken)
+
+	// compare DB and cookie refresh token
+	err = bcrypt.CompareHashAndPassword([]byte(refreshToken.Token), []byte(originalRefreshToken))
+
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, "Refresh token is invalid")
+		return
+	}
+
+	c.Next()
 }
