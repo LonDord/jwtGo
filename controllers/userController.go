@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 func Signup(c *gin.Context) {
@@ -52,18 +53,18 @@ func Signup(c *gin.Context) {
 
 func GetPair(c *gin.Context) {
 	// Get the id from the request
-	var body struct {
-		Id uuid.UUID
-	}
+	id := c.Query("id")
 
-	if c.Bind(&body) != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})
+	// Request security check
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
 		return
 	}
 
 	// Look up requested user
 	var user models.User
-	initializers.DB.First(&user, "id = ?", body.Id)
+	initializers.DB.First(&user, "id = ?", parsedID)
 
 	if user.Id == uuid.Nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No user found"})
@@ -71,13 +72,13 @@ func GetPair(c *gin.Context) {
 	}
 
 	// Generate JWT token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
 		"sub": user.Id,
 		"exp": time.Now().Add(time.Minute * 20).Unix(),
 		"ip":  c.ClientIP(),
 	})
 
-	tokenString, err := token.SignedString([]byte(os.Getenv("SECRET")))
+	jwtTokenString, err := jwtToken.SignedString([]byte(os.Getenv("SECRET")))
 
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create token"})
@@ -94,15 +95,33 @@ func GetPair(c *gin.Context) {
 	}
 
 	// Create refresh token
-	refreshToken := models.RefreshToken{
-		UserId:  user.Id,
-		Token:   string(hashedToken),
-		Expires: time.Now().Add(time.Hour * 24 * 20).Unix(),
-	}
 
-	result := initializers.DB.Create(&refreshToken)
+	var refreshToken models.RefreshToken
+	result := initializers.DB.First(&refreshToken, "user_id = ?", user.Id)
 
-	if result.Error != nil {
+	if result.Error != nil && result.Error == gorm.ErrRecordNotFound {
+		refreshToken = models.RefreshToken{
+			UserId:  user.Id,
+			Token:   string(hashedToken),
+			Expires: time.Now().Add(time.Hour * 24 * 20).Unix(),
+		}
+
+		err := initializers.DB.Create(&refreshToken).Error
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create refresh token"})
+			return
+		}
+	} else if result.Error == nil {
+		err := initializers.DB.Model(&refreshToken).Where("user_id = ?", user.Id).Updates(map[string]interface{}{
+			"Token":   string(hashedToken),
+			"Expires": time.Now().Add(time.Hour * 24 * 20).Unix(),
+		}).Error
+
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to update refresh token"})
+			return
+		}
+	} else {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create refresh token"})
 		return
 	}
@@ -112,7 +131,7 @@ func GetPair(c *gin.Context) {
 
 	// Respond
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("Authorization", tokenString, 60*20, "", "", false, true)
+	c.SetCookie("RefreshToken", basedRefreshToken, 60*60*24*20, "", "", false, true)
 
-	c.JSON(http.StatusOK, gin.H{"RefreshToken": basedRefreshToken})
+	c.JSON(http.StatusOK, gin.H{"AccessToken": jwtTokenString})
 }
