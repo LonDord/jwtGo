@@ -12,7 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
+	// "gorm.io/gorm"
 )
 
 func Signup(c *gin.Context) {
@@ -72,78 +72,65 @@ func GetPair(c *gin.Context) {
 	}
 
 	c.Set("user", user)
-	GetJwtAndRefresh(c)
+	GenerateTokenPair(c)
 }
 
 func Refresh(c *gin.Context) {
-	GetJwtAndRefresh(c)
+	GenerateTokenPair(c)
 }
 
-func GetJwtAndRefresh(c *gin.Context) {
-	userFromContext, _ := c.Get("user")
-	user := userFromContext.(models.User)
+func GenerateTokenPair(c *gin.Context) {
+	user := c.MustGet("user").(models.User)
+	clientIP := c.ClientIP()
 
-	// Generate JWT token
-	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
+	// 1. Генерируем уникальный ID для Access токена
+	accessId := uuid.New()
+
+	// 2. Создаем JWT (Access токен)
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
 		"sub": user.Id,
 		"exp": time.Now().Add(time.Minute * 20).Unix(),
-		"ip":  c.ClientIP(),
+		"ip":  clientIP,
+		"jti": accessId.String(), // Уникальный идентификатор токена
 	})
 
-	jwtTokenString, err := jwtToken.SignedString([]byte(os.Getenv("SECRET")))
-
+	accessTokenString, err := accessToken.SignedString([]byte(os.Getenv("SECRET")))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
 		return
 	}
 
-	// Generate refresh token hash
-	originalRefreshToken := uuid.New().String()
-	hashedToken, err := bcrypt.GenerateFromPassword([]byte(originalRefreshToken), bcrypt.DefaultCost)
-
+	// 3. Генерируем Refresh токен
+	rawRefreshToken := uuid.New().String()
+	hashedRefreshToken, err := bcrypt.GenerateFromPassword([]byte(rawRefreshToken), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to hash refresh token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash refresh token"})
 		return
 	}
 
-	// Create refresh token
+	// 4. Сохраняем Refresh токен в БД
+	refreshToken := models.RefreshToken{
+		Id:       uuid.New(),
+		UserId:   user.Id,
+		Token:    string(hashedRefreshToken),
+		AccessId: accessId, // Связываем с Access токеном
+		IP:       clientIP,
+		Expires:  time.Now().Add(time.Hour * 24 * 20).Unix(),
+	}
 
-	var refreshToken models.RefreshToken
-	result := initializers.DB.First(&refreshToken, "user_id = ?", user.Id)
-
-	if result.Error != nil && result.Error == gorm.ErrRecordNotFound {
-		refreshToken = models.RefreshToken{
-			UserId:  user.Id,
-			Token:   string(hashedToken),
-			Expires: time.Now().Add(time.Hour * 24 * 20).Unix(),
-		}
-
-		err := initializers.DB.Create(&refreshToken).Error
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create refresh token"})
-			return
-		}
-	} else if result.Error == nil {
-		err := initializers.DB.Model(&refreshToken).Where("user_id = ?", user.Id).Updates(map[string]interface{}{
-			"Token":   string(hashedToken),
-			"Expires": time.Now().Add(time.Hour * 24 * 20).Unix(),
-		}).Error
-
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to update refresh token"})
-			return
-		}
-	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create refresh token"})
+	if err := initializers.DB.Create(&refreshToken).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save refresh token"})
 		return
 	}
 
-	// Refresh token to base64
-	basedRefreshToken := base64.StdEncoding.EncodeToString([]byte(originalRefreshToken))
+	// 5. Отправляем токены клиенту
+	encodedRefresh := base64.StdEncoding.EncodeToString([]byte(rawRefreshToken))
 
-	// Respond
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("RefreshToken", basedRefreshToken, 60*60*24*20, "", "", false, true)
+	c.SetCookie("RefreshToken", encodedRefresh, 60*60*24*20, "", "", false, true)
 
-	c.JSON(http.StatusOK, gin.H{"AccessToken": jwtTokenString})
+	c.JSON(http.StatusOK, gin.H{
+		"access_token": accessTokenString,
+		"expires_in":   time.Now().Add(time.Minute * 20).Unix(),
+	})
 }
